@@ -1,0 +1,4 @@
+symfonycasts_tailwind:
+    # Utilise le binaire Tailwind v4 téléchargé et mis en cache par le bundle
+    # (https://github.com/SymfonyCasts/TailwindBundle/current/index.html)
+    binary_version: 'v4.3.3'

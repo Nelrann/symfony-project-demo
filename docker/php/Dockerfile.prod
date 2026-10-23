@@ -1,0 +1,93 @@
+# ---- Stage 1: Build dependencies ----
+FROM composer:2 AS builder
+
+WORKDIR /app
+
+# Copy composer files first for better caching
+COPY composer.json composer.lock symfony.lock ./
+
+# Install production dependencies only
+RUN composer install \
+    --no-dev \
+    --no-scripts \
+    --no-interaction \
+    --prefer-dist \
+    --optimize-autoloader
+
+# Copy the rest of the application
+COPY . .
+
+# Run post-install scripts (cache warmup, assets, etc.)
+RUN composer dump-autoload --optimize --classmap-authoritative \
+    # var/tailwind est retiré : remplacé par le volume nommé tailwind_bin
+    # (sinon le bundle mkdir 0777 dans un dossier root-owned du volume vide échouerait)
+    && rm -rf var/cache var/log var/tailwind
+
+# ---- Stage 2: Production image ----
+FROM php:8.3-fpm-alpine
+
+# Install only runtime system dependencies
+RUN apk add --no-cache \
+    bash \
+    libzip \
+    libpng \
+    libjpeg-turbo \
+    freetype \
+    oniguruma \
+    icu \
+    mysql-client
+
+# Install PHP extensions (production)
+RUN apk add --no-cache --virtual .build-deps \
+    libzip-dev \
+    libpng-dev \
+    libjpeg-turbo-dev \
+    freetype-dev \
+    oniguruma-dev \
+    icu-dev \
+    linux-headers \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install -j$(nproc) \
+        pdo \
+        pdo_mysql \
+        zip \
+        gd \
+        intl \
+        opcache \
+        mbstring \
+        bcmath \
+        exif \
+    && apk del .build-deps
+
+# OPcache production config
+RUN { \
+    echo 'opcache.enable=1'; \
+    echo 'opcache.memory_consumption=256'; \
+    echo 'opcache.interned_strings_buffer=16'; \
+    echo 'opcache.max_accelerated_files=20000'; \
+    echo 'opcache.validate_timestamps=0'; \
+    echo 'opcache.revalidate_freq=0'; \
+    echo 'opcache.preload=/var/www/html/config/preload.php'; \
+    echo 'opcache.preload_user=www-data'; \
+} > /usr/local/etc/php/conf.d/opcache-prod.ini
+
+# Date & timezone
+RUN echo 'date.timezone=UTC' > /usr/local/etc/php/conf.d/timezone.ini
+
+# Create non-root user
+RUN addgroup -g 1000 www && adduser -u 1000 -G www -s /bin/sh -D www
+
+WORKDIR /var/www/html
+
+# Copy application from builder stage
+COPY --from=builder --chown=www:www /app /var/www/html
+
+# Ensure var directory is writable (var/tailwind inclus : point de montage du
+# volume tailwind_bin, possède un owner www sinon le bundle ne peut pas y écrire)
+RUN mkdir -p var/cache var/log var/share var/tailwind \
+    && chown -R www:www var
+
+USER www
+
+EXPOSE 9000
+CMD ["php-fpm"]

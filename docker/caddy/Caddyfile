@@ -1,0 +1,44 @@
+# Caddy reverse proxy with automatic HTTPS
+# Set the DOMAIN environment variable (e.g. DOMAIN=app.tondomaine.com)
+
+{
+    default_sni {$DOMAIN:localhost}
+}
+
+http://{$DOMAIN:localhost} {
+    # Redirige vers HTTPS sur le port hôte exposé (WEB_HTTPS_PORT)
+    redir https://{$DOMAIN:localhost}:{$WEB_HTTPS_PORT:443}{uri} permanent
+}
+
+{$DOMAIN:localhost} {
+    # Certificat issué localement par Caddy : indispensable quand ce Caddy n'est
+    # pas exposé directement sur Internet (un Caddy edge en amont possède déjà
+    # le vrai certificat Let's Encrypt sur les ports 80/443).
+    # Si ce Caddy est un jour exposé directement (ports 80/443 à lui),
+    # retirer cette ligne pour réactiver Let's Encrypt.
+    tls internal
+
+    reverse_proxy nginx:80
+
+    # Security headers
+    header {
+        X-Frame-Options "SAMEORIGIN"
+        X-Content-Type-Options "nosniff"
+        X-XSS-Protection "1; mode=block"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+    }
+
+    # Enable compression
+    encode gzip zstd
+
+    # Logging
+    log {
+        output file /var/log/caddy/access.log
+    }
+}
+
+# Redirect www to non-www (optional, uncomment if needed)
+# www.{$DOMAIN:localhost} {
+#     redir https://{$DOMAIN:localhost}{uri} permanent
+# }
